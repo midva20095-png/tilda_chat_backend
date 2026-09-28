@@ -1,7 +1,6 @@
 import asyncio
 import re
 import base64
-import io
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
@@ -40,8 +39,12 @@ async def root():
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     global last_active_client
     await websocket.accept()
+    
+    # Регистрируем клиента и сразу обновляем текущего активного
     active_connections[client_id] = websocket
+    last_active_client = client_id
 
+    # Если были отложенные сообщения — отправляем
     if client_id in pending_messages and pending_messages[client_id]:
         for msg in pending_messages[client_id]:
             await websocket.send_text(msg)
@@ -52,7 +55,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             last_active_client = client_id
 
-            # 📸 Обработка Фото изображений
+            # 📸 Фото
             if data.startswith("data:image"):
                 header, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -63,7 +66,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"📷 Фото от клиента ({client_id})"
                 )
 
-            # 🎤 Обработка Голосовых сообщений
+            # 🎤 Голосовое
             elif data.startswith("data:audio"):
                 header, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -74,7 +77,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"🎙️ Голосовое от клиента ({client_id})"
                 )
 
-            # 💬 Обычное текстовое сообщение
+            # 💬 Текст
             else:
                 await bot.send_message(
                     chat_id=ADMIN_ID,
@@ -94,36 +97,35 @@ async def handle_admin_reply(message: types.Message):
     global last_active_client
     target_client_id = None
 
-    if message.reply_to_message and message.reply_to_message.caption:
-        orig_text = message.reply_to_message.caption
-        match = re.search(r"\(user_.*?\)", orig_text)
+    # 1. Попытка узнать ID из Reply (ответа на сообщение или фото)
+    if message.reply_to_message:
+        text_to_search = message.reply_to_message.caption or message.reply_to_message.text or ""
+        match = re.search(r"\(user_.*?\)", text_to_search)
         if match:
             target_client_id = match.group(0).replace("(", "").replace(")", "")
 
-    elif message.reply_to_message and message.reply_to_message.text:
-        orig_text = message.reply_to_message.text
-        match = re.search(r"💬 Сообщение от клиента \((.*?)\):", orig_text)
-        if match:
-            target_client_id = match.group(1)
-
+    # 2. Если ответили без Reply — берем последнего активного
     if not target_client_id:
         target_client_id = last_active_client
 
     if not target_client_id:
-        await message.reply("⚠️ Ни одного клиента еще не было.")
+        await message.reply("⚠️ Нет активного клиента.")
         return
 
     reply_text = message.text or "Сообщение без текста"
 
+    # Проверяем реальное наличие в активных подключениях
     if target_client_id in active_connections:
         try:
             await active_connections[target_client_id].send_text(reply_text)
-            await message.reply(f"✅ Отправлено клиенту [{target_client_id}]")
+            await message.reply(f"✅ Отправлено [{target_client_id}]")
             return
         except Exception:
+            # Если сокет «завис», переходим к сохранению в очередь
             pass
 
+    # Если клиент временно переподключается/оффлайн
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
     pending_messages[target_client_id].append(reply_text)
-    await message.reply(f"📥 Сохранено для [{target_client_id}]. Сообщение придет при открытии сайта.")
+    await message.reply(f"📥 Клиент обновил страницу или оффлайн. Сообщение сохранено для [{target_client_id}] и доставится автоматически.")
