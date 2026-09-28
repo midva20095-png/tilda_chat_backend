@@ -42,6 +42,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     active_connections[client_id] = websocket
     last_active_client = client_id
 
+    # Отправляем клиенту сигнал, что соединение установлено
+    await websocket.send_text("SYSTEM_CONNECTED")
+
     if client_id in pending_messages and pending_messages[client_id]:
         for msg in pending_messages[client_id]:
             try:
@@ -64,6 +67,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 )
                 break
 
+            # Подтверждаем клиенту, что сообщение получено сервером
+            await websocket.send_text(f"SYSTEM_ACK:{data[:20]}")
+
             if data.startswith("data:image"):
                 _, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -71,7 +77,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await bot.send_photo(
                     chat_id=ADMIN_ID,
                     photo=photo,
-                    caption=f"📷 Фото от клиента ({client_id})",
+                    caption=f"📷 Фото от клиента ({client_id})\nОтветьте на это сообщение, чтобы написать клиенту.",
                     reply_markup=ReplyKeyboardRemove()
                 )
 
@@ -82,14 +88,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await bot.send_voice(
                     chat_id=ADMIN_ID,
                     voice=voice,
-                    caption=f"🎙️ Голосовое от клиента ({client_id})",
+                    caption=f"🎙️ Голосовое от клиента ({client_id})\nОтветьте на это сообщение, чтобы написать клиенту.",
                     reply_markup=ReplyKeyboardRemove()
                 )
 
             else:
                 await bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"💬 Сообщение от клиента ({client_id}):\n{data}",
+                    text=f"💬 Сообщение от клиента ({client_id}):\n{data}\n\n👉 Ответьте Reply (ответить) на это сообщение, чтобы клиент получил ответ.",
                     reply_markup=ReplyKeyboardRemove()
                 )
 
@@ -132,7 +138,7 @@ async def handle_admin_reply(message: types.Message):
         target_client_id = last_active_client
 
     if not target_client_id:
-        await message.reply("⚠️ Нет активного клиента на сайте.", reply_markup=ReplyKeyboardRemove())
+        await message.reply("⚠️ Нет активного клиента на сайте. Попросите клиента написать в чат.", reply_markup=ReplyKeyboardRemove())
         return
 
     payload_to_send = None
@@ -161,7 +167,7 @@ async def handle_admin_reply(message: types.Message):
     if target_client_id in active_connections:
         try:
             await active_connections[target_client_id].send_text(payload_to_send)
-            await message.reply(f"✅ Отправлено клиенту [{target_client_id}]", reply_markup=ReplyKeyboardRemove())
+            await message.reply(f"✅ Ответ успешно доставлен клиенту [{target_client_id}]!", reply_markup=ReplyKeyboardRemove())
             return
         except Exception:
             pass
@@ -169,4 +175,4 @@ async def handle_admin_reply(message: types.Message):
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
     pending_messages[target_client_id].append(payload_to_send)
-    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}].", reply_markup=ReplyKeyboardRemove())
+    await message.reply(f"📥 Клиент временно оффлайн. Сообщение сохранено в очередь и уйдет, как только он откроет сайт.", reply_markup=ReplyKeyboardRemove())
