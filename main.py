@@ -56,6 +56,16 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             last_active_client = client_id
 
+            # Обработка закрытия диалога клиентом
+            if data == "CLIENT_CLOSED_DIALOG":
+                await websocket.send_text("SYSTEM_CLOSE_DIALOG")
+                await bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"🔴 Клиент ({client_id}) завершил диалог.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                break
+
             # Прием фото от клиента
             if data.startswith("data:image"):
                 _, encoded = data.split(",", 1)
@@ -96,6 +106,27 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 async def handle_admin_reply(message: types.Message):
     global last_active_client
     target_client_id = None
+
+    # Обработка команды /close от админа в Telegram для принудительного закрытия диалога
+    if message.text and message.text.startswith("/close"):
+        parts = message.text.split(" ", 1)
+        if len(parts) >= 2:
+            target_client_id = parts[1].strip()
+        else:
+            target_client_id = last_active_client
+
+        if target_client_id and target_client_id in active_connections:
+            try:
+                ws = active_connections[target_client_id]
+                await ws.send_text("SYSTEM_CLOSE_DIALOG")
+                await ws.close()
+                del active_connections[target_client_id]
+                await message.reply(f"✅ Диалог с клиентом [{target_client_id}] успешно закрыт.", reply_markup=ReplyKeyboardRemove())
+            except Exception as e:
+                await message.reply(f"⚠️ Ошибка при закрытии диалога: {e}", reply_markup=ReplyKeyboardRemove())
+        else:
+            await message.reply("⚠️ Клиент не найден в активных соединениях.", reply_markup=ReplyKeyboardRemove())
+        return
 
     # Поиск ID клиента из ответного сообщения (reply)
     if message.reply_to_message:
