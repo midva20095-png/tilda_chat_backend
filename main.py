@@ -40,11 +40,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     global last_active_client
     await websocket.accept()
     
-    # Жестко закрепляем текущее живое соединение
     active_connections[client_id] = websocket
     last_active_client = client_id
 
-    # Доставляем всё, что накопилось, пока клиент был offline
+    # Отправка накопленных сообщений из очереди
     if client_id in pending_messages and pending_messages[client_id]:
         for msg in pending_messages[client_id]:
             try:
@@ -58,7 +57,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             last_active_client = client_id
 
-            # Обработка фото
             if data.startswith("data:image"):
                 _, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -69,7 +67,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"📷 Фото от клиента ({client_id})"
                 )
 
-            # Обработка голосового
             elif data.startswith("data:audio"):
                 _, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -80,7 +77,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"🎙️ Голосовое от клиента ({client_id})"
                 )
 
-            # Обычный текст
             else:
                 await bot.send_message(
                     chat_id=ADMIN_ID,
@@ -88,45 +84,46 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 )
 
     except WebSocketDisconnect:
-        # Удаляем из активных ТОЛЬКО если это соединение всё еще текущее для этого ID
         if active_connections.get(client_id) == websocket:
             del active_connections[client_id]
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.reply("Бот активен!")
+    await message.reply("Чат-бот активен и готов к пересылке сообщений.")
 
 @dp.message()
 async def handle_admin_reply(message: types.Message):
     global last_active_client
     target_client_id = None
 
+    # Поиск ID клиента из ответного сообщения (reply)
     if message.reply_to_message:
         text_to_search = message.reply_to_message.caption or message.reply_to_message.text or ""
         match = re.search(r"\(user_.*?\)", text_to_search)
         if match:
             target_client_id = match.group(0).replace("(", "").replace(")", "")
 
+    # Если ответ без цитирования — берем последнего активного
     if not target_client_id:
         target_client_id = last_active_client
 
     if not target_client_id:
-        await message.reply("⚠️ Нет активного клиента.")
+        await message.reply("⚠️ Нет активного клиента на сайте.")
         return
 
     reply_text = message.text or "Сообщение"
 
-    # Проверяем наличие активного сокета
+    # Отправка напрямую в веб-сокет
     if target_client_id in active_connections:
         try:
             await active_connections[target_client_id].send_text(reply_text)
-            await message.reply(f"✅ Отправлено [{target_client_id}]")
+            await message.reply(f"✅ Отправлено клиенту [{target_client_id}]")
             return
         except Exception:
             pass
 
-    # Если сокет сбросился при переподключении, кидаем в очередь
+    # Буферизация, если клиент на мгновение отключился
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
     pending_messages[target_client_id].append(reply_text)
-    await message.reply(f"📥 Сообщение сохранено в очередь для [{target_client_id}].")
+    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}] (клиент заберет при обновлении страницы).")
