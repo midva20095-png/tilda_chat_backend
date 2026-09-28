@@ -1,9 +1,12 @@
 import asyncio
 import re
+import base64
+import io
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
+from aiogram.types import BufferedInputFile
 
 TOKEN = "8882726880:AAHRNXQY8b0Da7QlrIppNPKUBRktRwoPALw"
 ADMIN_ID = 5943987954
@@ -23,7 +26,7 @@ dp = Dispatcher()
 
 active_connections: dict[str, WebSocket] = {}
 pending_messages: dict[str, list[str]] = {}
-last_active_client: str | None = None  # Запоминаем последнего написавшего клиента
+last_active_client: str | None = None
 
 @app.on_event("startup")
 async def on_startup():
@@ -39,7 +42,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await websocket.accept()
     active_connections[client_id] = websocket
 
-    # Отправляем накопившиеся неотправленные сообщения
     if client_id in pending_messages and pending_messages[client_id]:
         for msg in pending_messages[client_id]:
             await websocket.send_text(msg)
@@ -48,42 +50,71 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            last_active_client = client_id  # Обновляем последнего клиента
-            await bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"💬 Сообщение от клиента ({client_id}):\n{data}"
-            )
+            last_active_client = client_id
+
+            # 📸 Обработка Фото изображений
+            if data.startswith("data:image"):
+                header, encoded = data.split(",", 1)
+                file_bytes = base64.b64decode(encoded)
+                photo = BufferedInputFile(file_bytes, filename="photo.png")
+                await bot.send_photo(
+                    chat_id=ADMIN_ID,
+                    photo=photo,
+                    caption=f"📷 Фото от клиента ({client_id})"
+                )
+
+            # 🎤 Обработка Голосовых сообщений
+            elif data.startswith("data:audio"):
+                header, encoded = data.split(",", 1)
+                file_bytes = base64.b64decode(encoded)
+                voice = BufferedInputFile(file_bytes, filename="voice.ogg")
+                await bot.send_voice(
+                    chat_id=ADMIN_ID,
+                    voice=voice,
+                    caption=f"🎙️ Голосовое от клиента ({client_id})"
+                )
+
+            # 💬 Обычное текстовое сообщение
+            else:
+                await bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"💬 Сообщение от клиента ({client_id}):\n{data}"
+                )
+
     except WebSocketDisconnect:
         if client_id in active_connections:
             del active_connections[client_id]
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
-    await message.reply("Бот активен! Отвечайте простыми сообщениями последнему клиенту.")
+    await message.reply("Бот активен! Готов принимать текст, фото и голосовые сообщения.")
 
 @dp.message()
 async def handle_admin_reply(message: types.Message):
     global last_active_client
     target_client_id = None
 
-    # 1. Если ответили через Reply на конкретное сообщение
-    if message.reply_to_message and message.reply_to_message.text:
+    if message.reply_to_message and message.reply_to_message.caption:
+        orig_text = message.reply_to_message.caption
+        match = re.search(r"\(user_.*?\)", orig_text)
+        if match:
+            target_client_id = match.group(0).replace("(", "").replace(")", "")
+
+    elif message.reply_to_message and message.reply_to_message.text:
         orig_text = message.reply_to_message.text
         match = re.search(r"💬 Сообщение от клиента \((.*?)\):", orig_text)
         if match:
             target_client_id = match.group(1)
 
-    # 2. Если написали просто текстом — отправляем последнему активному клиенту
     if not target_client_id:
         target_client_id = last_active_client
 
     if not target_client_id:
-        await message.reply("⚠️ Ни одного клиента еще не было или диалог не выбран.")
+        await message.reply("⚠️ Ни одного клиента еще не было.")
         return
 
-    reply_text = message.text
+    reply_text = message.text or "Сообщение без текста"
 
-    # Отправка на сайт
     if target_client_id in active_connections:
         try:
             await active_connections[target_client_id].send_text(reply_text)
@@ -92,7 +123,6 @@ async def handle_admin_reply(message: types.Message):
         except Exception:
             pass
 
-    # Сохранение, если клиент оффлайн
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
     pending_messages[target_client_id].append(reply_text)
