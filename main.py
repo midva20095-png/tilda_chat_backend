@@ -4,8 +4,7 @@ import base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
-from aiogram.types import BufferedInputFile
+from aiogram.types import BufferedInputFile, ReplyKeyboardRemove
 
 TOKEN = "8882726880:AAHRNXQY8b0Da7QlrIppNPKUBRktRwoPALw"
 ADMIN_ID = 5943987954
@@ -65,7 +64,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await bot.send_photo(
                     chat_id=ADMIN_ID,
                     photo=photo,
-                    caption=f"📷 Фото от клиента ({client_id})"
+                    caption=f"📷 Фото от клиента ({client_id})",
+                    reply_markup=ReplyKeyboardRemove()
                 )
 
             # Прием голосового от клиента
@@ -76,23 +76,21 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await bot.send_voice(
                     chat_id=ADMIN_ID,
                     voice=voice,
-                    caption=f"🎙️ Голосовое от клиента ({client_id})"
+                    caption=f"🎙️ Голосовое от клиента ({client_id})",
+                    reply_markup=ReplyKeyboardRemove()
                 )
 
             # Обычный текст от клиента
             else:
                 await bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"💬 Сообщение от клиента ({client_id}):\n{data}"
+                    text=f"💬 Сообщение от клиента ({client_id}):\n{data}",
+                    reply_markup=ReplyKeyboardRemove()
                 )
 
     except WebSocketDisconnect:
         if active_connections.get(client_id) == websocket:
             del active_connections[client_id]
-
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    await message.reply("Чат-бот активен и готов к пересылке сообщений.")
 
 @dp.message()
 async def handle_admin_reply(message: types.Message):
@@ -111,7 +109,7 @@ async def handle_admin_reply(message: types.Message):
         target_client_id = last_active_client
 
     if not target_client_id:
-        await message.reply("⚠️ Нет активного клиента на сайте.")
+        await message.reply("⚠️ Нет активного клиента на сайте.", reply_markup=ReplyKeyboardRemove())
         return
 
     payload_to_send = None
@@ -137,14 +135,14 @@ async def handle_admin_reply(message: types.Message):
         payload_to_send = message.text
 
     if not payload_to_send:
-        await message.reply("⚠️ Этот тип сообщений не поддерживается.")
+        await message.reply("⚠️ Этот тип сообщений не поддерживается.", reply_markup=ReplyKeyboardRemove())
         return
 
     # Отправка напрямую в веб-сокет
     if target_client_id in active_connections:
         try:
             await active_connections[target_client_id].send_text(payload_to_send)
-            await message.reply(f"✅ Отправлено клиенту [{target_client_id}]")
+            await message.reply(f"✅ Отправлено клиенту [{target_client_id}]", reply_markup=ReplyKeyboardRemove())
             return
         except Exception:
             pass
@@ -153,4 +151,4 @@ async def handle_admin_reply(message: types.Message):
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
     pending_messages[target_client_id].append(payload_to_send)
-    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}].")
+    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}].", reply_markup=ReplyKeyboardRemove())
