@@ -57,6 +57,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             last_active_client = client_id
 
+            # Прием фото от клиента
             if data.startswith("data:image"):
                 _, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -67,6 +68,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"📷 Фото от клиента ({client_id})"
                 )
 
+            # Прием голосового от клиента
             elif data.startswith("data:audio"):
                 _, encoded = data.split(",", 1)
                 file_bytes = base64.b64decode(encoded)
@@ -77,6 +79,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     caption=f"🎙️ Голосовое от клиента ({client_id})"
                 )
 
+            # Обычный текст от клиента
             else:
                 await bot.send_message(
                     chat_id=ADMIN_ID,
@@ -111,19 +114,43 @@ async def handle_admin_reply(message: types.Message):
         await message.reply("⚠️ Нет активного клиента на сайте.")
         return
 
-    reply_text = message.text or "Сообщение"
+    payload_to_send = None
+
+    # Если админ отправил ФОТО
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        file = await bot.get_file(file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        encoded = base64.b64encode(file_bytes.read()).decode("utf-8")
+        payload_to_send = f"data:image/png;base64,{encoded}"
+
+    # Если админ отправил ГОЛОСОВОЕ
+    elif message.voice:
+        file_id = message.voice.file_id
+        file = await bot.get_file(file_id)
+        file_bytes = await bot.download_file(file.file_path)
+        encoded = base64.b64encode(file_bytes.read()).decode("utf-8")
+        payload_to_send = f"data:audio/ogg;base64,{encoded}"
+
+    # Если админ отправил ТЕКСТ
+    elif message.text:
+        payload_to_send = message.text
+
+    if not payload_to_send:
+        await message.reply("⚠️ Этот тип сообщений не поддерживается.")
+        return
 
     # Отправка напрямую в веб-сокет
     if target_client_id in active_connections:
         try:
-            await active_connections[target_client_id].send_text(reply_text)
+            await active_connections[target_client_id].send_text(payload_to_send)
             await message.reply(f"✅ Отправлено клиенту [{target_client_id}]")
             return
         except Exception:
             pass
 
-    # Буферизация, если клиент на мгновение отключился
+    # Буферизация, если клиент временно не в сети
     if target_client_id not in pending_messages:
         pending_messages[target_client_id] = []
-    pending_messages[target_client_id].append(reply_text)
-    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}] (клиент заберет при обновлении страницы).")
+    pending_messages[target_client_id].append(payload_to_send)
+    await message.reply(f"📥 Сохранено в очередь для [{target_client_id}].")
